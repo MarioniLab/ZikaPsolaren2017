@@ -10,6 +10,11 @@ dupscript=../scripts/dedup_pairs.sh
 bsub -R "rusage[mem=16000]" -n 1 -e logd.err -o logd.err bash ${dupscript} Lib2 bam/Lib2_L001.bam bam/Lib2_L002.bam
 bsub -R "rusage[mem=10000]" -n 1 -e logdc.err -o logdc.err bash ${dupscript} Lib2-cont bam/Lib2-cont_L001.bam bam/Lib2-cont_L002.bam
 
+# Counting libraries.
+countscript=../scripts/count_pairs.sh
+bsub -R "rusage[mem=10000]" -n 1 -o logx.out -e logx.err bash ${countscript} bam/Lib2.bam ../scripts/combined.gtf processed
+bsub -R "rusage[mem=10000]" -n 1 -o logc.out -e logc.err bash ${countscript} bam/Lib2-cont.bam ../scripts/combined.gtf processed
+
 # Building HDF5 libraries.
 buildscript=../scripts/build_hdf5.sh
 bsub -R "rusage[mem=10000]" -n 1 -e log1.err -o log1.err bash ${buildscript} bam/Lib2.bam processed/Lib2.h5
