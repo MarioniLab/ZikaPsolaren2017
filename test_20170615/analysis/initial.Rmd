@@ -1,0 +1,765 @@
+---
+title: Initial inspection of the Zika virus data
+author: Aaron Lun
+date: 18 June 2017
+output:
+  html_document:
+    fig_caption: false
+    toc: true
+    toc_float: true
+    depth: 3
+    number_sections: true
+    theme: united 
+    highlight: tango 
+---
+
+```{r, echo=FALSE, results="hide"}
+#dir.create("figures-process", showWarning=FALSE)
+knitr::opts_chunk$set(error=FALSE, message=FALSE, warning=FALSE)
+knitr::opts_chunk$set(dev='pdf')#fig.path="figures-process/")
+options(width=90)
+```
+
+<!--
+bsub -R "rusage[mem=8000]" -n 1 -o diag.out -e diag.err "echo \"knitr::knit('initial.Rmd')\" | R --no-save --vanilla" 
+-->
+
+# Diagnostics for Library 1: high ATP, low ligase, 0.5 kJ, interactions
+
+## Based on gene assignments
+
+Setting up the file path.
+Also loading human transcript annotation. 
+
+```{r}
+library(rtracklayer)
+anno <- import("../../scripts/combined.gtf")
+mito.genes <- anno$gene_id[as.logical(seqnames(anno)=="chrM")]
+lib <- "../processed/TestLib8-1_S1.raw.gz"
+```
+
+Computing statistics for reads. 
+
+```{r compstats}
+# Only using the first 10 million entries for diagnostic purposes, ignoring read names.
+incoming <- read.table(lib, colClasses= c(list(NULL), as.list(rep("character", 4))),
+                       stringsAsFactors=FALSE, nrows=1e7)
+N <- nrow(incoming)
+status1 <- incoming[,1]
+status2 <- incoming[,3]
+
+# Determining the proportion of read pairs that are both mapped.
+is.mapped <- c("Assigned", "Unassigned_NoFeatures", "Unassigned_Duplicate")
+sum(status1 %in% is.mapped & status2 %in% is.mapped)/N
+
+## Determining the proportion of read pairs that are not duplicates.
+#is.nondup <- c("Assigned", "Unassigned_NoFeatures")
+#sum(status1 %in% is.nondup & status2 %in% is.nondup)/N
+
+# Determining the proportion of read pairs that are both assigned (mapped & non-duplicate). 
+both.good <- status1 == "Assigned" & status2 == "Assigned" 
+sum(both.good)/N
+
+# Stripping out the assigned read pairs.
+gene1 <- incoming[both.good,2]
+gene2 <- incoming[both.good,4]
+
+# Determining the proportion of assigned read pairs both mapped to Mt.
+sum(gene1 %in% mito.genes & gene2 %in% mito.genes)/sum(both.good)
+
+# Determining the proportion of assigned read pairs both NOT mapped to Mt.
+sum(!gene1 %in% mito.genes & !gene2 %in% mito.genes)/sum(both.good)
+
+# Determining the proportion of assigned read pairs mapped between Mt and nuclear genes.
+sum((gene1 %in% mito.genes)!=(gene2 %in% mito.genes))/sum(both.good)
+
+# Determining the proportion of read pairs mapped to different genes.
+sum(gene1!=gene2)/sum(both.good)
+```
+
+## Looking at the fragment sizes
+
+Setting up the file path to the BAM file.
+
+```{r}
+library(Rsamtools)
+incoming <- "../bam/TestLib8-1_S1.bam"
+```
+
+Having a look at the paired-end statistics.
+Again, only looking at the first 10 million read pairs.
+
+```{r bamstats}
+bf <- BamFile(incoming, yieldSize=1e7)
+out1 <- scanBam(bf, param=ScanBamParam(what=c("flag", "mapq", "isize", "rname"), 
+    flag=scanBamFlag(isFirstMateRead=TRUE)))[[1]]
+out2 <- scanBam(bf, param=ScanBamParam(what=c("flag", "mapq", "isize"), 
+    flag=scanBamFlag(isSecondMateRead=TRUE)))[[1]]
+summary.stats <- list()    
+
+# Keeping things that are not duplicates, supplementary, or unmapped/mate unmapped.
+# (Need to check mappedness here, as unmapped reads don't get marked as duplicates.)
+out1 <- lapply(out1, "[", !bitwAnd(out1$flag, 0x800 + 0x400 + 0x4 + 0x8))
+out2 <- lapply(out2, "[", !bitwAnd(out2$flag, 0x800 + 0x400 + 0x4 + 0x8))
+
+# Capping yield results in some asynchronicity due to supplementary alignments.
+smaller <- seq_len(min(length(out1$isize), length(out2$isize)))
+out1 <- lapply(out1, "[", smaller)
+out2 <- lapply(out2, "[", smaller)
+stopifnot(all(out1$isize + out2$isize==0L, na.rm=TRUE))
+
+# Computing the proportion of high-quality alignments.
+keep <- out1$mapq==255L & out2$mapq==255L 
+keep[is.na(keep)] <- FALSE
+out1 <- lapply(out1, "[", keep)
+out2 <- lapply(out2, "[", keep)
+table(keep)/length(keep)
+
+# Computing the proportion of the read pairs on the same chromosome.
+intra <- out1$isize!=0L
+out1 <- lapply(out1, "[", intra)
+out2 <- lapply(out2, "[", intra)
+table(intra)/length(intra)
+
+# Computing the distribution of strand orientation for Mt reads.
+in.mito <- out1$rname=="chrM"
+rev1 <- bitwAnd(out1$flag, 0x10)!=0L
+rev2 <- bitwAnd(out2$flag, 0x10)!=0L
+table(ifelse(rev1[in.mito], "R1", "F1"), ifelse(rev2[in.mito], "R2", "F2"))/sum(in.mito)
+
+# Computing the proportion of outward-facing read pairs.
+outward <- (!rev1 & out1$isize < 0L & rev2) | (!rev2 & out2$isize < 0L & rev1)
+(summary.stats$outward.Mt <- table(outward[in.mito])/sum(in.mito)) # ... in Mt
+(summary.stats$outward.Nc <- table(outward[!in.mito])/sum(!in.mito)) # ... in Nuc
+
+# Computing the proportion of inward-facing read pairs.
+inward <- (!rev1 & out1$isize > 0L & rev2) | (!rev2 & out2$isize > 0L & rev1)
+out1 <- lapply(out1, "[", inward)
+out2 <- lapply(out2, "[", inward)
+table(inward[in.mito])/sum(in.mito) # ... in Mt
+table(inward[!in.mito])/sum(!in.mito) # ... in Nuc
+
+# Examining the distribution of sizes, in and outside of Mt.
+sizes <- abs(out1$isize)
+in.mito <- out1$rname=="chrM"
+mito.sizes <- quantile(sizes[in.mito], 1:100/100)
+summary.stats$sizes <- mito.sizes[mito.sizes >= 300]
+mito.sizes # ... in Mt
+quantile(sizes[!in.mito], 1:100/100) # ... in Nuc 
+```
+
+Saving the summary statistics.
+
+```{r}
+all.stats <- list()
+all.stats[["TestLib8-1_S1"]] <- summary.stats
+```
+
+# Diagnostics for Library 2: high ATP, low ligase, 0.5 kJ, reverse crosslink
+
+## Based on gene assignments
+
+Setting up the file path.
+
+```{r}
+lib <- "processed/TestLib8-2_S2.raw.gz"
+```
+
+Computing statistics for reads. 
+
+```{r, ref.label="compstats"}
+```
+
+## Looking at the fragment sizes
+
+Setting up the file path to the BAM file.
+
+```{r}
+incoming <- "../bam/TestLib8-2_S2.bam"
+```
+
+Having a look at the paired-end statistics.
+
+```{r, ref.label="bamstats"}
+```
+
+Saving the summary statistics.
+
+```{r}
+all.stats[["TestLib8-2_S2"]] <- summary.stats
+```
+
+# Diagnostics for Library 3: high ATP, low ligase, 0.5 kJ, no crosslink 
+
+## Based on gene assignments
+
+Setting up the file path.
+
+```{r}
+lib <- "processed/TestLib8-3_S3.raw.gz"
+```
+
+Computing statistics for reads. 
+
+```{r, ref.label="compstats"}
+```
+
+## Looking at the fragment sizes
+
+Setting up the file path to the BAM file.
+
+```{r}
+incoming <- "../bam/TestLib8-3_S3.bam"
+```
+
+Having a look at the paired-end statistics.
+
+```{r, ref.label="bamstats"}
+```
+
+Saving the summary statistics.
+
+```{r}
+all.stats[["TestLib8-3_S3"]] <- summary.stats
+```
+
+# Diagnostics for Library 4: low ATP, high ligase, 0.5 kJ, interactions
+
+## Based on gene assignments
+
+Setting up the file path.
+
+```{r}
+lib <- "processed/TestLib8-4_S4.raw.gz"
+```
+
+Computing statistics for reads. 
+
+```{r, ref.label="compstats"}
+```
+
+
+## Looking at the fragment sizes
+
+Setting up the file path to the BAM file.
+
+```{r}
+incoming <- "../bam/TestLib8-4_S4.bam"
+```
+
+Having a look at the paired-end statistics.
+
+```{r, ref.label="bamstats"}
+```
+
+Saving the summary statistics.
+
+```{r}
+all.stats[["TestLib8-4_S4"]] <- summary.stats
+```
+
+# Diagnostics for Library 5: low ATP, high ligase, 0.5 kJ, reverse crosslink
+
+## Based on gene assignments
+
+Setting up the file path.
+
+```{r}
+lib <- "processed/TestLib8-5_S5.raw.gz"
+```
+
+Computing statistics for reads. 
+
+```{r, ref.label="compstats"}
+```
+
+
+## Looking at the fragment sizes
+
+Setting up the file path to the BAM file.
+
+```{r}
+incoming <- "../bam/TestLib8-5_S5.bam"
+```
+
+Having a look at the paired-end statistics.
+
+```{r, ref.label="bamstats"}
+```
+
+Saving the summary statistics.
+
+```{r}
+all.stats[["TestLib8-5_S5"]] <- summary.stats
+```
+
+# Diagnostics for Library 6: low ATP, high ligase, 0.5 kJ, no crosslink 
+
+## Based on gene assignments
+
+Setting up the file path.
+
+```{r}
+lib <- "processed/TestLib8-6_S6.raw.gz"
+```
+
+Computing statistics for reads. 
+
+```{r, ref.label="compstats"}
+```
+
+
+## Looking at the fragment sizes
+
+Setting up the file path to the BAM file.
+
+```{r}
+incoming <- "../bam/TestLib8-6_S6.bam"
+```
+
+Having a look at the paired-end statistics.
+
+```{r, ref.label="bamstats"}
+```
+
+Saving the summary statistics.
+
+```{r}
+all.stats[["TestLib8-6_S6"]] <- summary.stats
+```
+
+# Diagnostics for Library 7: high ATP, low ligase, 1.5 kJ, interactions
+
+## Based on gene assignments
+
+Setting up the file path.
+
+```{r}
+lib <- "processed/TestLib8-7_S7.raw.gz"
+```
+
+Computing statistics for reads. 
+
+```{r, ref.label="compstats"}
+```
+
+## Looking at the fragment sizes
+
+Setting up the file path to the BAM file.
+
+```{r}
+incoming <- "../bam/TestLib8-7_S7.bam"
+```
+
+Having a look at the paired-end statistics.
+
+```{r, ref.label="bamstats"}
+```
+
+Saving the summary statistics.
+
+```{r}
+all.stats[["TestLib8-7_S7"]] <- summary.stats
+```
+
+# Diagnostics for Library 8: high ATP, low ligase, 1.5 kJ, reverse crosslink 
+
+## Based on gene assignments
+
+Setting up the file path.
+
+```{r}
+lib <- "processed/TestLib8-8_S8.raw.gz"
+```
+
+Computing statistics for reads. 
+
+```{r, ref.label="compstats"}
+```
+
+## Looking at the fragment sizes
+
+Setting up the file path to the BAM file.
+
+```{r}
+incoming <- "../bam/TestLib8-8_S8.bam"
+```
+
+Having a look at the paired-end statistics.
+
+```{r, ref.label="bamstats"}
+```
+
+Saving the summary statistics.
+
+```{r}
+all.stats[["TestLib8-8_S8"]] <- summary.stats
+```
+
+# Diagnostics for Library 9: high ATP, low ligase, 1.5 kJ, no crosslink 
+
+## Based on gene assignments
+
+Setting up the file path.
+
+```{r}
+lib <- "processed/TestLib8-9_S9.raw.gz"
+```
+
+Computing statistics for reads. 
+
+```{r, ref.label="compstats"}
+```
+
+## Looking at the fragment sizes
+
+Setting up the file path to the BAM file.
+
+```{r}
+incoming <- "../bam/TestLib8-9_S9.bam"
+```
+
+Having a look at the paired-end statistics.
+
+```{r, ref.label="bamstats"}
+```
+
+Saving the summary statistics.
+
+```{r}
+all.stats[["TestLib8-9_S9"]] <- summary.stats
+```
+
+# Diagnostics for Library 10: low ATP, high ligase, 1.5 kJ, interactions
+
+## Based on gene assignments
+
+Setting up the file path.
+
+```{r}
+lib <- "processed/TestLib8-10_S10.raw.gz"
+```
+
+Computing statistics for reads. 
+
+```{r, ref.label="compstats"}
+```
+
+## Looking at the fragment sizes
+
+Setting up the file path to the BAM file.
+
+```{r}
+incoming <- "../bam/TestLib8-10_S10.bam"
+```
+
+Having a look at the paired-end statistics.
+
+```{r, ref.label="bamstats"}
+```
+
+Saving the summary statistics.
+
+```{r}
+all.stats[["TestLib8-10_S10"]] <- summary.stats
+```
+
+# Diagnostics for Library 11: low ATP, high ligase, 1.5 kJ, reverse crosslink 
+
+## Based on gene assignments
+
+Setting up the file path.
+
+```{r}
+lib <- "processed/TestLib8-11_S11.raw.gz"
+```
+
+Computing statistics for reads. 
+
+```{r, ref.label="compstats"}
+```
+
+## Looking at the fragment sizes
+
+Setting up the file path to the BAM file.
+
+```{r}
+incoming <- "../bam/TestLib8-11_S11.bam"
+```
+
+Having a look at the paired-end statistics.
+
+```{r, ref.label="bamstats"}
+```
+
+Saving the summary statistics.
+
+```{r}
+all.stats[["TestLib8-11_S11"]] <- summary.stats
+```
+
+# Diagnostics for Library 12: low ATP, high ligase, 1.5 kJ, no crosslink 
+
+## Based on gene assignments
+
+Setting up the file path.
+
+```{r}
+lib <- "processed/TestLib8-12_S12.raw.gz"
+```
+
+Computing statistics for reads. 
+
+```{r, ref.label="compstats"}
+```
+
+## Looking at the fragment sizes
+
+Setting up the file path to the BAM file.
+
+```{r}
+incoming <- "../bam/TestLib8-12_S12.bam"
+```
+
+Having a look at the paired-end statistics.
+
+```{r, ref.label="bamstats"}
+```
+
+Saving the summary statistics.
+
+```{r}
+all.stats[["TestLib8-12_S12"]] <- summary.stats
+```
+
+# Diagnostics for Library 13: high ATP, low ligase, 4.5 kJ, interactions
+
+## Based on gene assignments
+
+Setting up the file path.
+
+```{r}
+lib <- "processed/TestLib8-13_S13.raw.gz"
+```
+
+Computing statistics for reads. 
+
+```{r, ref.label="compstats"}
+```
+
+## Looking at the fragment sizes
+
+Setting up the file path to the BAM file.
+
+```{r}
+incoming <- "../bam/TestLib8-13_S13.bam"
+```
+
+Having a look at the paired-end statistics.
+
+```{r, ref.label="bamstats"}
+```
+
+Saving the summary statistics.
+
+```{r}
+all.stats[["TestLib8-13_S13"]] <- summary.stats
+```
+
+# Diagnostics for Library 14: high ATP, low ligase, 4.5 kJ, reverse crosslink 
+
+## Based on gene assignments
+
+Setting up the file path.
+
+```{r}
+lib <- "processed/TestLib8-14_S14.raw.gz"
+```
+
+Computing statistics for reads. 
+
+```{r, ref.label="compstats"}
+```
+
+## Looking at the fragment sizes
+
+Setting up the file path to the BAM file.
+
+```{r}
+incoming <- "../bam/TestLib8-14_S14.bam"
+```
+
+Having a look at the paired-end statistics.
+
+```{r, ref.label="bamstats"}
+```
+
+Saving the summary statistics.
+
+```{r}
+all.stats[["TestLib8-14_S14"]] <- summary.stats
+```
+
+# Diagnostics for Library 15: high ATP, low ligase, 4.5 kJ, no crosslink
+
+## Based on gene assignments
+
+Setting up the file path.
+
+```{r}
+lib <- "processed/TestLib8-15_S15.raw.gz"
+```
+
+Computing statistics for reads. 
+
+```{r, ref.label="compstats"}
+```
+
+## Looking at the fragment sizes
+
+Setting up the file path to the BAM file.
+
+```{r}
+incoming <- "../bam/TestLib8-15_S15.bam"
+```
+
+Having a look at the paired-end statistics.
+
+```{r, ref.label="bamstats"}
+```
+
+Saving the summary statistics.
+
+```{r}
+all.stats[["TestLib8-15_S15"]] <- summary.stats
+```
+
+# Diagnostics for Library 16: low ATP, high ligase, 4.5 kJ, interactions
+
+## Based on gene assignments
+
+Setting up the file path.
+
+```{r}
+lib <- "processed/TestLib8-16_S16.raw.gz"
+```
+
+Computing statistics for reads. 
+
+```{r, ref.label="compstats"}
+```
+
+## Looking at the fragment sizes
+
+Setting up the file path to the BAM file.
+
+```{r}
+incoming <- "../bam/TestLib8-16_S16.bam"
+```
+
+Having a look at the paired-end statistics.
+
+```{r, ref.label="bamstats"}
+```
+
+Saving the summary statistics.
+
+```{r}
+all.stats[["TestLib8-16_S16"]] <- summary.stats
+```
+
+# Diagnostics for Library 17: low ATP, high ligase, 4.5 kJ, reverse crosslink 
+
+## Based on gene assignments
+
+Setting up the file path.
+
+```{r}
+lib <- "processed/TestLib8-17_S17.raw.gz"
+```
+
+Computing statistics for reads. 
+
+```{r, ref.label="compstats"}
+```
+
+## Looking at the fragment sizes
+
+Setting up the file path to the BAM file.
+
+```{r}
+incoming <- "../bam/TestLib8-17_S17.bam"
+```
+
+Having a look at the paired-end statistics.
+
+```{r, ref.label="bamstats"}
+```
+
+Saving the summary statistics.
+
+```{r}
+all.stats[["TestLib8-17_S17"]] <- summary.stats
+```
+
+# Diagnostics for Library 18: low ATP, high ligase, 4.5 kJ, no crosslink
+
+## Based on gene assignments
+
+Setting up the file path.
+
+```{r}
+lib <- "processed/TestLib8-18_S18.raw.gz"
+```
+
+Computing statistics for reads. 
+
+```{r, ref.label="compstats"}
+```
+
+## Looking at the fragment sizes
+
+Setting up the file path to the BAM file.
+
+```{r}
+incoming <- "../bam/TestLib8-18_S18.bam"
+```
+
+Having a look at the paired-end statistics.
+
+```{r, ref.label="bamstats"}
+```
+
+Saving the summary statistics.
+
+```{r}
+all.stats[["TestLib8-18_S18"]] <- summary.stats
+```
+
+# Printing out the summary statistics
+
+Printing out the proportions of outward-facing mitochondrial read pairs.
+
+```{r}
+lapply(all.stats, "[[", i="outward.Mt")
+```
+
+Same for the outward-facing nuclear read pairs.
+
+
+```{r}
+lapply(all.stats, "[[", i="outward.Nc")
+```
+
+Printing out the proportions of inward-facing read pairs above 300.
+
+```{r}
+lapply(all.stats, "[[", i="sizes")
+```
+
+# Wrapping up
+
+```{r}
+sessionInfo()
+```
+
