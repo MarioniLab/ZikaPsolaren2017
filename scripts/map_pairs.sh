@@ -1,3 +1,4 @@
+####################################
 ## This script extracts the UMIs, aligns each read to the hg38+Zika genome and merges the BAM files together.
 
 set -e 
@@ -49,14 +50,17 @@ then
     StripeThis $prefix
 fi
 
+####################################
 # Running UMI-tools to extract the UMI from the first four bases of read 2.
 new1=${prefix}/$(basename $first)
 new2=${prefix}/$(basename $second)
 bcpattern=$(printf '%*s' "${umilen}" | tr ' ' "N")
 zcat $second | umi_tools extract --bc-pattern=${bcpattern} --read2-in=$first --read2-out=$new1 -L logs/${prefix}.umi-extract.log | gzip > $new2
 
+####################################
 # Running STAR to align to the genome.
 # Done separately for each read to avoid favouring adjacent mapping locations for paired reads.
+
 location=$( dirname $BASH_SOURCE )
 for i in 1 2
 do 
@@ -73,7 +77,12 @@ do
     STAR --runThreadN 12 --genomeDir ${index} \
         --readFilesIn ${current} --readFilesCommand zcat \
         --outFileNamePrefix ${prefix}/${superfix}_ --outSAMtype BAM Unsorted --outSAMunmapped Within \
-        --chimSegmentMin 20 --chimOutType WithinBAM ${staropts} 
+        --outFilterMultimapNmax 1 \ # only unique alignments
+        --chimOutType WithinBAM \
+        --chimSegmentMin 20 \ # Need at least 20 bp to consider a chimeric alignment
+        --chimScoreJunctionNonGTAG 0 \ # Not restricted to splice-site chimeras.
+        --chimMainSegmentMultNmax 1 \ # only unique chimeric segments
+        ${staropts} 
 
     # Pulling out primary alignments and flipping the flag.
     curfile=${prefix}/${superfix}_Aligned.out.bam
@@ -81,7 +90,9 @@ do
     python ${location}/switch_flags.py $curfile $newfile ${superfix}
 done
 
+####################################
 # Merging everyone together.
+
 subfinal=${prefix}/out.bam
 prefinal=${prefix}/whee
 final=bam/${prefix}.bam
