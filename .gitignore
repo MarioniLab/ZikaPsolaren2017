@@ -1,0 +1,10 @@
+*.html
+*.md
+*.err
+*.out
+figures-*
+
+processed/
+bam/
+fastq/
+
