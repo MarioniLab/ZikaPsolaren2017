@@ -1,10 +1,10 @@
-# Mapping libraries
+# Mapping libraries (UMI of length 6)
 mapscript=../scripts/map_pairs.sh
 for i in $(ls fastq/*_R1_*)
 do
     prefix=$(basename $i | sed "s/_R1.*//")
     other=$(echo $i | sed "s/R1/R2/")
-    bsub -R "rusage[mem=40000]" -n 12 -e log-${prefix}.err -o log-${prefix}.out bash ${mapscript} ${i} ${other} ${prefix}
+    bsub -R "rusage[mem=40000]" -n 12 -e log-${prefix}.err -o log-${prefix}.out bash ${mapscript} -u 6 ${i} ${other} ${prefix} 
 done
 
 # Dedupping libraries
