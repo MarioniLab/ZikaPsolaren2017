@@ -73,15 +73,19 @@ do
 	    superfix=second
     fi
 
-    # Aligning.
+    # Aligning:
+    # --outFilterMultimapNmax specifies only unique alignments
+    # --chimSegmentMin requires at least 20 bp to consider a chimeric alignment
+    # --chimScoreJunctionNonGTAG removes the restriction for splice-site chimeras
+    # --chimMainSegmentMultNmax only considers unique chimeric segments
     STAR --runThreadN 12 --genomeDir ${index} \
         --readFilesIn ${current} --readFilesCommand zcat \
         --outFileNamePrefix ${prefix}/${superfix}_ --outSAMtype BAM Unsorted --outSAMunmapped Within \
-        --outFilterMultimapNmax 1 \ # only unique alignments
+        --outFilterMultimapNmax 1 \
         --chimOutType WithinBAM \
-        --chimSegmentMin 20 \ # Need at least 20 bp to consider a chimeric alignment
-        --chimScoreJunctionNonGTAG 0 \ # Not restricted to splice-site chimeras.
-        --chimMainSegmentMultNmax 1 \ # only unique chimeric segments
+        --chimSegmentMin 20 \
+        --chimScoreJunctionNonGTAG 0 \
+        --chimMainSegmentMultNmax 1 \
         ${staropts} 
 
     # Pulling out primary alignments and flipping the flag.
