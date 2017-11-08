@@ -29,6 +29,6 @@ ranges <- emptyGenome(chrs)
 param <- pairParam(ranges)
 out <- preparePairs('${curfile}', param, file='${output}', storage=1000, minq=255, dedup=FALSE)
 save(param, out, file=sub('h5$', 'Rda', '${output}'))
-" | Rdevel --no-save --vanilla
+" | R --no-save --vanilla
 
 rm -r ${prefix}
