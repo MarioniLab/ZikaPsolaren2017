@@ -12,7 +12,7 @@ dupscript=../scripts/dedup_pairs.sh
 for i in {1..18}
 do
     stub=TestLib8-${i}_S${i}
-    bsub -R "rusage[mem=10000]" -n 1 -e log${i}.err -o log${i}.err bash ${dupscript} ${stub} bam/${stub}_L001.bam bam/${stub}_L002.bam
+    bsub -R "rusage[mem=10000]" -n 1 -e log${i}.err -o log${i}.out bash ${dupscript} ${stub} bam/${stub}_L001.bam bam/${stub}_L002.bam
 done
 
 # Counting libraries.
@@ -20,7 +20,7 @@ countscript=../scripts/count_pairs.sh
 for i in {1..18}
 do
     stub=TestLib8-${i}_S${i}
-    bsub -R "rusage[mem=10000]" -n 1 -e log${i}.err -o log${i}.err bash ${countscript} bam/${stub}.bam ../scripts/combined.gtf processed/
+    bsub -R "rusage[mem=10000]" -n 1 -e log${i}.err -o log${i}.out bash ${countscript} bam/${stub}.bam ../scripts/combined.gtf processed/
 done
 
 # Building HDF5 libraries.
@@ -28,5 +28,5 @@ buildscript=../scripts/build_hdf5.sh
 for i in {1..18}
 do
     stub=TestLib8-${i}_S${i}
-    bsub -R "rusage[mem=10000]" -n 1 -e log${i}.err -o log${i}.err bash ${buildscript} bam/${stub}.bam processed/${stub}.h5
+    bsub -R "rusage[mem=10000]" -n 1 -e log${i}.err -o log${i}.out bash ${buildscript} bam/${stub}.bam processed/${stub}.h5
 done
