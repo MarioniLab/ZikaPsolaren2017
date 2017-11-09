@@ -1,0 +1,43 @@
+
+<!--
+bsub -R "rusage[mem=8000]" -n 1 -o diag.out -e diag.err "echo \"knitr::knit('supp_qc.Rmd')\" | R --no-save --vanilla" 
+-->
+
+## Checking absolute strand orientation
+
+Pulling out the first 10 million reads and checking the orientations of the first/second reads on the ZIKA genome.
+
+```{r, message=FALSE, error=FALSE, warning=FALSE}
+library(Rsamtools)
+output <- list()
+for (incoming in list.files("../bam", pattern="S[0-9]\\.bam$", full=TRUE)) { 
+    bf <- BamFile(incoming, yieldSize=1e7)
+    out1 <- scanBam(bf, param=ScanBamParam(what=c("flag", "mapq", "isize", "rname"), 
+        flag=scanBamFlag(isFirstMateRead=TRUE)))[[1]]
+    out2 <- scanBam(bf, param=ScanBamParam(what=c("flag", "mapq", "isize"), 
+        flag=scanBamFlag(isSecondMateRead=TRUE)))[[1]]
+    summary.stats <- list()    
+    
+    # Keeping things that are not duplicates, supplementary, or unmapped/mate unmapped.
+    # (Need to check mappedness here, as unmapped reads don't get marked as duplicates.)
+    out1 <- lapply(out1, "[", !bitwAnd(out1$flag, 0x800 + 0x400 + 0x4 + 0x8))
+    out2 <- lapply(out2, "[", !bitwAnd(out2$flag, 0x800 + 0x400 + 0x4 + 0x8))
+    
+    # Capping yield results in some asynchronicity due to supplementary alignments.
+    smaller <- seq_len(min(length(out1$isize), length(out2$isize)))
+    out1 <- lapply(out1, "[", smaller)
+    out2 <- lapply(out2, "[", smaller)
+    stopifnot(all(out1$isize + out2$isize==0L, na.rm=TRUE))
+    
+    # Computing the distribution of strand orientation for Zika reads.
+    in.zika <- out1$rname=="ZIKV"
+    rev1 <- bitwAnd(out1$flag, 0x10)!=0L
+    rev2 <- bitwAnd(out2$flag, 0x10)!=0L
+    ori <- list(FF=sum(!rev1 & !rev2),
+                FR=sum(!rev1 & rev2),
+                RF=sum(rev1 & !rev2),
+                RR=sum(rev1 & rev2))
+    output[[sub(".bam$", "", basename(incoming))]] <- unlist(ori)
+}
+data.frame(do.call(rbind, output))
+```

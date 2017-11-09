@@ -1,0 +1,183 @@
+---
+title: Quality control checks on the Zika-Psolaren data
+author: Aaron Lun
+date: 7 November 2017
+output:
+  html_document:
+    fig_caption: false
+    toc: true
+    toc_float: true
+    depth: 3
+    number_sections: true
+    theme: united 
+    highlight: tango 
+---
+
+```{r, echo=FALSE, results="hide"}
+#dir.create("figures-process", showWarning=FALSE)
+knitr::opts_chunk$set(error=FALSE, message=FALSE, warning=FALSE)
+knitr::opts_chunk$set(dev='png', fig.path="figures-process/", 
+                      dpi=300, dev.args=list(pointsize=15))
+options(width=90)
+```
+
+# Setting up the data structures
+
+Specifying the libraries to examine.
+
+```{r}
+dir.out <- "../processed"
+all.h5 <- list.files(dir.out, full=TRUE, pattern="h5$")
+basename(all.h5)
+```
+
+Getting the `pairParam` object out.
+
+```{r}
+library(diffHic)
+cur.env <- new.env()
+load(sub("h5", "Rda", all.h5[1]), envir=cur.env)
+param <- cur.env$param
+param
+```    
+
+# Examining the mapping statistics
+
+We have a look at the number of read pairs that were successfully mapped.
+(We apply a MAPQ filter of 10, and UMIs have been removed.
+We get 100% mapping proportion because unmapped reads are no longer present in the BAM file!)
+
+```{r}
+stats <- list()
+for (x in list.files(dir.out, full=TRUE, pattern="Rda$")) {
+    cur.env <- new.env()
+    load(x, envir=cur.env)
+    stats[[sub(".Rda", "", basename(x))]] <- cur.env$out$pairs[c(1,4)]
+}
+stats <- data.frame(do.call(rbind, stats))
+stats
+```
+
+# Examining the strand orientations 
+
+## Human-only
+
+We construct strand orientation plots, and we collect the number of reads in each orientation in each library.
+We do this first for the human chromosomes.
+
+```{r}
+all.but.zika <- setdiff(seqlevels(param$fragments), "ZIKV")
+alt.param <- reform(param, restrict=all.but.zika)
+alt.param
+```
+
+Running the stats for the human-only reads. 
+
+```{r strandori, fig.width=15, fig.height=6}
+stats <- list()
+par(mfrow=c(1,3))
+for (x in all.h5) { 
+    diags <- getPairData(x, alt.param)
+
+    # Constructing the histograms for each orientation.
+    llinsert <- log2(diags$insert + 1L)
+    intra <- !is.na(llinsert)
+    breaks <- seq(min(llinsert[intra]), max(llinsert[intra]), length.out=30)
+    hist(llinsert[diags$orientation==1L], breaks=breaks, col="darkgreen", 
+         main=paste0(basename(x), "(inward)"))
+    hist(llinsert[diags$orientation==2L] ,breaks=breaks, col="red", 
+         main=paste0(basename(x), "(outward)"))
+    hist(llinsert[diags$orientation==0L | diags$orientation==3L], breaks=breaks, 
+         col="blue", main=paste0(basename(x), "(same strand)"))
+
+    # Recording stats.
+    is.inward <- intra & diags$orientation==1L
+    cur.stats <- list(Number=nrow(diags), 
+        Interchr=1-sum(intra)/nrow(diags),
+        Outward=sum(diags$orientation==2L & intra)/sum(intra),
+        LongInward=sum(diags$insert > 500 & is.inward)/sum(is.inward))
+
+    stats[[sub(".Rda", "", basename(x))]] <- unlist(cur.stats)
+}
+```
+
+We examine the breakdown of read pairs.
+
+```{r}
+data.frame(do.call(rbind, stats))
+```
+
+```{r, echo=FALSE, results="hide"}
+gc()
+```
+
+## ZIKA-only
+
+We do this again for ZIKA-ZIKA interactions.
+
+```{r}
+alt.param <- reform(param, restrict="ZIKV")
+alt.param
+```
+
+Running the stats.
+
+```{r, ref.label="strandori", fig.width=15, fig.height=6}
+```
+
+We examine the breakdown of read pairs.
+
+```{r}
+data.frame(do.call(rbind, stats))
+```
+
+```{r, echo=FALSE, results="hide"}
+gc()
+```
+
+```{r, results="asis", echo=FALSE}
+if (file.exists("supp_qc.md")) { 
+    cat("We also have a look at the absolute orientation of these files.\n")
+    cat(readLines("supp_qc.md"), sep="\n")
+}   
+```
+
+# Checking the read pair distributions
+
+We want to count the number of read pairs between every pair of chromosomes.
+
+```{r}
+iset <- squareCounts(all.h5, param=param, width=1e9)
+iset
+```
+
+We ask for the number of read pairs between ZIKA and all other chromosomes.
+
+```{r}
+zikv <- regions(iset)[seqnames(regions(iset))=="ZIKV"]
+zikv.set <- subsetByOverlaps(iset, zikv)
+stats <- data.frame(ZikaHuman=colSums(assay(zikv.set)))
+stats$Prop <- stats$ZikaHuman/zikv.set$totals
+stats
+```
+
+We ask for the number of read pairs between the mitochondrial genome and all other chromosomes.
+This presumes that mitochondrial and nuclear transcripts do not interact.
+
+```{r}
+mito <- regions(iset)[seqnames(regions(iset))=="chrM"]
+mito.set <- subsetByOverlaps(iset, mito)
+stats <- data.frame(MitoOther=colSums(assay(mito.set)))
+stats$Prop <- stats$MitoOther/mito.set$totals
+stats
+```
+
+# Session information
+
+Reporting the session information.
+
+```{r}
+sessionInfo()
+```
+
+
