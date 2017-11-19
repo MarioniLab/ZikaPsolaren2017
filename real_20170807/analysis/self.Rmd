@@ -1,0 +1,192 @@
+---
+title: Performing a differential analysis of Zika structure 
+author: Aaron Lun
+date: 21 August 2017
+output:
+  html_document:
+    fig_caption: false
+    toc: true
+    toc_float: true
+    depth: 3
+    number_sections: true
+    theme: united 
+    highlight: tango 
+---
+
+```{r, echo=FALSE, results="hide"}
+knitr::opts_chunk$set(error=FALSE, message=FALSE, warning=FALSE)
+dir.create("figures-self", showWarning=FALSE)
+knitr::opts_chunk$set(dev='png', fig.path="figures-self/")
+options(width=90)
+```
+
+# Overview
+
+Here we perform a differential analysis of Zika-Zika interactions between the livefire samples and the reverse control samples.
+The first job is to set up the parameters for counting.
+
+```{r}
+library(diffHic)
+load("../processed/1-Livefire1_S1.Rda")
+param <- reform(param, restrict="ZIKV")
+param
+```
+
+Now to count into 20 bp bins.
+We run `reduceRegions` to reduce memory usage from having lots of unused bins.
+
+```{r}
+fnames <- c("1-Livefire1_S1.h5", "2-Livefire2_S2.h5", "3-Livefire3_S3.h5",
+            "4-Rcont1_S4.h5", "5-Rcont2_S5.h5", "6-Rcont3_S6.h5")
+obj <- squareCounts(file.path("../processed", fnames), param, width=50, restrict.regions=TRUE)
+obj <- reduceRegions(obj)
+obj
+```
+
+```{r, echo=FALSE, results="hide"}
+gc()
+```
+
+# Setting up the differential analysis
+
+We convert this into a `DGEList` object.
+
+```{r}
+library(edgeR)
+y <- asDGEList(obj)
+```
+
+We apply some filtering to remove bin pairs that have low counts.
+In this case, we remove bin pairs that have average counts below 3.
+The coverage is so sparse that there is little point in estimating the non-specific ligation rate from inter-chromosomal contacts.
+
+```{r}
+ab <- aveLogCPM(y)
+keep <- ab > aveLogCPM(3, mean(y$samples$lib.size))
+y <- y[keep,]
+subobj <- obj[keep,]
+summary(keep)
+```
+
+We also set up the design matrix at this point.
+
+```{r}
+cond <- factor(rep(c("Livefire", "Rcont"), each=3))
+batch <- factor(rep(1:3, 2))
+design <- model.matrix(~0 + batch + cond)
+design
+```
+
+
+```{r, echo=FALSE, results="hide"}
+gc()
+```
+
+# Normalization for sequencing depth
+
+Setting the effective library sizes is tricky, as we cannot assume that most regions are not differential between livefire and control. 
+We instead use library size normalization, which is justified by the fact that there should be no changes in RNA composition between the paired livefire and control libraries.
+The only difference between these libraries should be in the pairing of the Zika-containing reads, either with each other (dangling ends) or with other transcripts).
+
+```{r}
+y$samples$lib.size
+```
+
+Under this logic, the coverage of each region in the genome _should_ be the same, as only the pairings of reads should change.
+In practice, this is not quite true as the sequenceability/mappability of read pairs is not an additive function of the individual reads. 
+Some regions will be more likely to lose read pairs, depending on which other regions they are linked to.
+This results in some differential coverage in a few regions, though it tends to be quite weak.
+
+```{r}
+margins <- marginCounts(file.path("../processed", fnames), param=param, 
+    width=50, restrict.regions=TRUE)
+y.m <- asDGEList(margins)
+ab.m <- aveLogCPM(y.m)
+keep.m <- ab.m > aveLogCPM(3, mean(y.m$samples$lib.size))
+margins <- margins[keep.m,]
+y.m <- y.m[keep.m,]
+y.m <- estimateDisp(y.m, design)
+fit.m <- glmQLFit(y.m, design, robust=TRUE)
+res.m <- glmQLFTest(fit.m)
+summary(decideTestsDGE(res.m))
+plot(res.m$AveLogCPM, res.m$table$logFC)
+```
+
+We assume these effects to mostly cancel out between conditions, so that there is no major effect on the total library size.
+Thus, the total library sizes should be the same regardless of the nature of the interactions. 
+Any differences caused by sequencing depth should be removed.
+We do not have the ability to remove biases in ligation or cross-linking efficiency; we will have to assume that these are mostly the same.
+
+# Modelling the biological variability
+
+We estimate the NB dispersion.
+
+```{r}
+y <- estimateDisp(y, design)
+plotBCV(y)
+```
+
+Same for the QL dispersion.
+
+```{r}
+fit <- glmQLFit(y, design, robust=TRUE)
+plotQLDisp(fit)
+```
+
+# Performing the contrasts
+
+We test for differences between the livefire and reverse control samples.
+As it turns out, nearly all pairwise interactions increase in intensity in the livefire samples, which makes it pretty useless.
+
+```{r}
+res <- glmQLFTest(fit)
+summary(decideTestsDGE(res))
+```
+
+Thus, we ask for interactions that exhibit an absolute log-fold change greater than 5.
+This prioritizes the top most strongly DE interactions with the largest effect sizes.
+
+```{r}
+res <- glmTreat(fit, lfc=5)
+summary(decideTestsDGE(res))
+```
+
+We summarize the results to reduce redundancy.
+
+```{r}
+out <- diClusters(subobj, res$table, target=0.05)
+out$interactions
+```
+
+Combining the statistics and saving to file.
+
+```{r}
+library(csaw)
+stats <- combineTests(out$indices[[1]], res$table)
+best <- getBestTest(out$indices[[1]], res$table)
+output <- cbind(as.data.frame(out$interactions)[,c(2:3,7:8)], 
+                stats[,c(1:3,6)], Best.logFC=best$logFC)
+write.table(file="results_self.txt", output, row.names=FALSE, quote=FALSE, sep="\t")
+head(output)
+```
+
+# Visualizing the entire ZIKV gneome
+
+We can examine the interactions across the ZIKV genome in some more detail.
+
+```{r, fig.width=10, fig.height=6}
+caps <- 100 * y$samples$lib.size/mean(y$samples$lib.size)
+loc <- GRanges("ZIKV:1-10807")
+par(mfrow=c(2,3))
+for (f in seq_along(fnames)) { 
+    suppressWarnings(rotPlaid(file.path("../processed", fnames[f]), 
+        param=param, width=100, loc, max.count=caps[f]))
+    gc()
+}
+```
+
+# Wrapping up
+
+```{r}
+sessionInfo()
+```
