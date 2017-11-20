@@ -33,13 +33,11 @@ param
 ```
 
 Now to count into 20 bp bins.
-We run `reduceRegions` to reduce memory usage from having lots of unused bins.
 
 ```{r}
 fnames <- c("1-Livefire1_S1.h5", "2-Livefire2_S2.h5", "3-Livefire3_S3.h5",
             "4-Rcont1_S4.h5", "5-Rcont2_S5.h5", "6-Rcont3_S6.h5")
 obj <- squareCounts(file.path("../processed", fnames), param, width=50, restrict.regions=TRUE)
-obj <- reduceRegions(obj)
 obj
 ```
 
@@ -47,28 +45,20 @@ obj
 gc()
 ```
 
-# Setting up the differential analysis
-
-We convert this into a `DGEList` object.
-
-```{r}
-library(edgeR)
-y <- asDGEList(obj)
-```
-
 We apply some filtering to remove bin pairs that have low counts.
 In this case, we remove bin pairs that have average counts below 3.
 The coverage is so sparse that there is little point in estimating the non-specific ligation rate from inter-chromosomal contacts.
 
 ```{r}
-ab <- aveLogCPM(y)
-keep <- ab > aveLogCPM(3, mean(y$samples$lib.size))
-y <- y[keep,]
+library(edgeR)
+ab <- aveLogCPM(asDGEList(obj))
+keep <- ab > aveLogCPM(3, mean(obj$totals))
 subobj <- obj[keep,]
 summary(keep)
 ```
 
 We also set up the design matrix at this point.
+Here we're blocking on the sample of origin as both the livefire and control libraries are derived from the same pool of RNA.
 
 ```{r}
 cond <- factor(rep(c("Livefire", "Rcont"), each=3))
@@ -77,25 +67,31 @@ design <- model.matrix(~0 + batch + cond)
 design
 ```
 
-
-```{r, echo=FALSE, results="hide"}
-gc()
-```
-
 # Normalization for sequencing depth
 
-Setting the effective library sizes is tricky, as we cannot assume that most regions are not differential between livefire and control. 
-We instead use library size normalization, which is justified by the fact that there should be no changes in RNA composition between the paired livefire and control libraries.
-The only difference between these libraries should be in the pairing of the Zika-containing reads, either with each other (dangling ends) or with other transcripts).
+Normalizing is tricky as we cannot assume that most regions are not differential between livefire and control. 
+We use the number of dangling ends (inward-facing and insert size below 300 bp) on the Zika genome as the library size for each sample.
+Changes in the number of such artifacts represent composition biases that are uninteresting and should be removed.
 
 ```{r}
-y$samples$lib.size
+n.dangling <- numeric(length(fnames))
+for (x in seq_along(n.dangling)) { 
+    current <- getPairData(file.path("../processed", fnames[x]), param)
+    n.dangling[x] <- sum(current$insert < 300 & current$orientation==1L)
+}
+n.dangling
 ```
 
-Under this logic, the coverage of each region in the genome _should_ be the same, as only the pairings of reads should change.
-In practice, this is not quite true as the sequenceability/mappability of read pairs is not an additive function of the individual reads. 
-Some regions will be more likely to lose read pairs, depending on which other regions they are linked to.
-This results in some differential coverage in a few regions, though it tends to be quite weak.
+We use this to replace the total library size for normalization purposes, though the two are mostly the same.
+We do not have the ability to remove biases in ligation or cross-linking efficiency; we will have to assume that these are mostly the same.
+
+```{r}
+subobj$totals <- n.dangling
+obj$totals/n.dangling
+```
+
+As a final check: under this logic, the coverage of each region in the genome _should_ be the same, as only the pairings of reads should change.
+We can examine this using the total coverage of each bin on the Zika virus genome.
 
 ```{r}
 margins <- marginCounts(file.path("../processed", fnames), param=param, 
@@ -112,12 +108,17 @@ summary(decideTestsDGE(res.m))
 plot(res.m$AveLogCPM, res.m$table$logFC)
 ```
 
-We assume these effects to mostly cancel out between conditions, so that there is no major effect on the total library size.
-Thus, the total library sizes should be the same regardless of the nature of the interactions. 
-Any differences caused by sequencing depth should be removed.
-We do not have the ability to remove biases in ligation or cross-linking efficiency; we will have to assume that these are mostly the same.
+In practice, this is not quite true as the sequenceability/mappability of read pairs is not an additive function of the individual reads. 
+Some regions will be more likely to lose read pairs, depending on which other regions they are linked to.
+This results in some differential coverage in a few regions, though it tends to be quite weak.
 
 # Modelling the biological variability
+
+We convert this into a `DGEList` object.
+
+```{r}
+y <- asDGEList(subobj)
+```
 
 We estimate the NB dispersion.
 
@@ -143,11 +144,11 @@ res <- glmQLFTest(fit)
 summary(decideTestsDGE(res))
 ```
 
-Thus, we ask for interactions that exhibit an absolute log-fold change greater than 5.
+Thus, we ask for interactions that exhibit an absolute log-fold change greater than 3.
 This prioritizes the top most strongly DE interactions with the largest effect sizes.
 
 ```{r}
-res <- glmTreat(fit, lfc=5)
+res <- glmTreat(fit, lfc=3)
 summary(decideTestsDGE(res))
 ```
 
