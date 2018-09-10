@@ -11,22 +11,20 @@ by [Ziv _et al._ (2018)](https://doi.org/10.1038/s41592-018-0121-0).
 The `scripts` subdirectory contains a number of common scripts to process the sequencing data.
 These will be automatically called from elsewhere and do not need to be modified except for debugging purposes.
 
+The `genomes` subdirectory provides a central location for genome aligner builds and various annotation.
+Follow the instructions in `genomes/README.md` to create the genome annotation.
+
 Each other subdirectory refers to a batch of data collected throughout the course of this study.
 The data presented in the paper comes from `real_20170807`.
 Other batches involve a variety of different protocol conditions and biological samples, and can be largely ignored.
 
 ## Repeating the read alignment 
 
-Follow the instructions in `genomes/README.md` to create the genome annotation.
-This assumes that:
+Download the FASTQ files from ArrayExpress (E-MTAB-6427) into `real_20170807/fastq`.
+Then, enter `real_20170807` and execute the `run_me.sh` script, assuming:
 
 - You are on a LSF system.
 - You have [_STAR_](https://github.com/alexdobin/STAR) installed.
-
-Download the FASTQ files from ArrayExpress (E-MTAB-6427) into `real_20170807/fastq`.
-Then, enter `real_20170807` and execute the `run_me.sh` script.
-This further assumes:
-
 - You have Python installed with an up-to-date version of _pysam_.
 - You have [_umi-tools_](https://github.com/CGATOxford/UMI-tools) installed.
 - You have R installed with an up-to-date version of [_diffHic_](https://bioconductor.org/packages/diffHic).
@@ -43,3 +41,5 @@ The `supp_qc.Rmd` should be run first to be included in the report upon compilat
 This is done for interactions between human genes and the ZIKA genome.
 - `self.Rmd`, to test for differential intensity between COMRADES and the reverse control for ZIKA-ZIKA interactions.
 
+There is also an `initial.Rmd` that contains an older version of the quality control reports.
+This can be ignored.
