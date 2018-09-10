@@ -17,13 +17,18 @@ Other batches involve a variety of different protocol conditions and biological 
 
 ## Repeating the read alignment 
 
-Download the FASTQ files from ArrayExpress (E-MTAB-6427) into `real_20170807/fastq`.
-Then, execute the `run_me.sh` script, assuming:
+Follow the instructions in `genomes/README.md` to create the genome annotation.
+This assumes that:
 
 - You are on a LSF system.
+- You have [_STAR_](https://github.com/alexdobin/STAR) installed.
+
+Download the FASTQ files from ArrayExpress (E-MTAB-6427) into `real_20170807/fastq`.
+Then, enter `real_20170807` and execute the `run_me.sh` script.
+This further assumes:
+
 - You have Python installed with an up-to-date version of _pysam_.
 - You have [_umi-tools_](https://github.com/CGATOxford/UMI-tools) installed.
-- You have [_STAR_](https://github.com/alexdobin/STAR) installed.
 - You have R installed with an up-to-date version of [_diffHic_](https://bioconductor.org/packages/diffHic).
 
 This script will perform mapping, duplicate removal and construction of HDF5 files for differential analyses in _diffHic_.
