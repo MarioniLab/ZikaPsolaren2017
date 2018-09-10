@@ -21,7 +21,7 @@ countscript=../scripts/count_pairs.sh
 for i in $(ls bam/*.bam | grep "S[0-9].bam")
 do
     prefix=$(basename $i | sed "s/.bam$//")
-    bsub -R "rusage[mem=10000]" -n 1 -e log-${prefix}.err -o log-${prefix}.out bash ${countscript} ${i} ../scripts/combined.gtf processed/
+    bsub -R "rusage[mem=10000]" -n 1 -e log-${prefix}.err -o log-${prefix}.out bash ${countscript} ${i} ../genomes/combined.gtf processed/
 done
 
 # Building HDF5 libraries.

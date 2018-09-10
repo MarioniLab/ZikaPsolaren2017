@@ -4,7 +4,9 @@
 set -e 
 set -u
 
-index=/lustre/jmlab/resources/genomes/star/hg38_zikv/
+location=$( dirname $BASH_SOURCE )
+
+index=${location}/../genomes/hg38_zikv/
 umilen=4
 staropts=""
 while getopts "i:o:u:" opt
@@ -61,7 +63,6 @@ zcat $second | umi_tools extract --bc-pattern=${bcpattern} --read2-in=$first --r
 # Running STAR to align to the genome.
 # Done separately for each read to avoid favouring adjacent mapping locations for paired reads.
 
-location=$( dirname $BASH_SOURCE )
 for i in 1 2
 do 
     if [ $i -eq 1 ]
